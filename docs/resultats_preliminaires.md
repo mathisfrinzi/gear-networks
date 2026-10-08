@@ -157,9 +157,15 @@ comme d'habitude. Le réseau est identique à la référence ReLU à l'itératio
 - Les directions de la sphère se sont déplacées de 12° en moyenne et ReLU
   reste dominante pour 100 % des neurones.
 - Correctif découvert en écrivant le test : la sphère ne pouvait pas repartir
-  d'un sommet exact (gradient nul). Les départs aléatoires publiés plus haut
-  n'étaient pas concernés (résultats vérifiés strictement identiques après
-  correction).
+  d'un sommet exact (gradient nul). Les exp. 5 et 6 ont été calculées avant ce
+  correctif ; elles ont été **relancées après** et sont identiques : les 240
+  runs jouets (4 tâches × 6 variantes × 10 graines, MSE d'entraînement et de
+  validation) et les 6 runs MLP `sphere` / `sphere_kernel` (précision de test
+  et courbes de validation). Cause : les neurones démarrent à des positions
+  aléatoires ou au centre d'une face, et ne tombent jamais exactement sur un
+  sommet pendant l'entraînement. Le défaut n'affectait que les départs exacts
+  sur un sommet (`sphere_relu_init`, `harden()`), non utilisés avant le
+  correctif.
 
 ## Exp. 8 — Partir de ReLU et ouvrir les engrenages par intervalles
 
