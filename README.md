@@ -110,21 +110,22 @@ python tests/test_gear.py                  # 12 tests
 python tests/test_legacy_equivalence.py    # équivalence avec la version 2025
 ```
 
-Tous les scripts se lancent aussi depuis VS Code avec le bouton ▶, avec leurs
-réglages par défaut.
+Les scripts se lancent depuis la racine du dépôt (ou avec le bouton ▶ de VS Code,
+avec leurs réglages par défaut). Les résultats vont toujours dans `results/` à la
+racine, quel que soit le dossier de lancement.
 
 | Script | Contenu | Matériel |
 |---|---|---|
-| `exp1_toy.py` | tâches jouets, trajectoires de θ pour 5 initialisations | CPU, ~3 min |
-| `exp2_mlp.py` | MLP sur MNIST / Fashion-MNIST, 7 activations, plusieurs graines | CPU possible |
-| `exp3_resnet.py` | ResNet-20 sur CIFAR-10 | GPU |
-| `diag_nodes.py` | diagnostic du collage aux nœuds | CPU, ~3 min |
+| `experiments/exp1_toy.py` | tâches jouets, trajectoires de θ pour 5 initialisations | CPU, ~3 min |
+| `experiments/exp2_mlp.py` | MLP sur MNIST / Fashion-MNIST, 7 activations, plusieurs graines | CPU possible |
+| `experiments/exp3_resnet.py` | ResNet-20 sur CIFAR-10 | GPU |
+| `diagnostics/diag_nodes.py` | diagnostic du collage aux nœuds (`--quick` : 30 s) | CPU, ~3 min |
 
 Pour reproduire le tableau MLP :
-`python exp2_mlp.py --dataset fashion --seeds 3 --epochs 20 --gear-window 3 10`.
+`python experiments/exp2_mlp.py --dataset fashion --seeds 3 --epochs 20 --gear-window 3 10`.
 
 Pour le ResNet, un GPU est nécessaire (par exemple Google Colab : activez le
-GPU, envoyez le dossier, puis `!python run_resnet.py`). Un checkpoint est écrit
+GPU, envoyez le dossier, puis `!python experiments/run_resnet.py`). Un checkpoint est écrit
 à chaque époque, et relancer le script reprend un run interrompu.
 
 ### Variantes comparées
@@ -141,10 +142,10 @@ GPU, envoyez le dossier, puis `!python run_resnet.py`). Un checkpoint est écrit
 ## Structure du dépôt
 
 ```
-gears/          module GearActivation, ABUActivation, outils
+gears/          bibliothèque : GearActivation, ABUActivation, outils (utils.py : graines, journaux, graphiques)
+experiments/    expériences comparatives : exp1_toy, exp2_mlp, exp3_resnet, run_resnet
+diagnostics/    analyses du comportement des θ : diag_nodes (collage aux nœuds)
 tests/          tests unitaires et équivalence avec la version 2025
-exp1_toy.py     exp2_mlp.py     exp3_resnet.py     run_resnet.py     diag_nodes.py
-common.py       graines, journaux, tableaux, graphiques
 legacy/         version NumPy d'origine (2025) et problèmes identifiés
 docs/           résultats préliminaires, feuille de route
 assets/         figures du README
@@ -155,8 +156,3 @@ assets/         figures du README
 L'idée date d'août 2025 : la première implémentation NumPy est conservée dans
 [legacy/](legacy/), avec la liste des problèmes corrigés lors de la réécriture
 en PyTorch.
-
-
-
-
-
