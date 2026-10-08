@@ -305,8 +305,7 @@ assets/         figures du README
   époques sur CIFAR-10, une seule architecture de convolution.
 - Les variantes qui partent de ReLU (`gear_relu_init`) et l'alternance
   figé / entraîné ont été testées sur les jouets et le MLP, **pas sur le
-  ResNet** ; la sphère non plus. Ces tests restent à faire
-  ([docs/ROADMAP.md](docs/ROADMAP.md)).
+  ResNet** ; la sphère non plus. Ces tests restent à faire.
 
 ## Historique
 
