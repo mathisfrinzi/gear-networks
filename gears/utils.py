@@ -172,3 +172,73 @@ def plot_theta_trajectories(runs, path, max_neurons=12, title=""):
         fig.tight_layout()
         fig.savefig(path.replace(".png", f"_{act}.png"), dpi=120)
         plt.close(fig)
+
+
+def _azimuthal(u):
+    """Projection azimutale équivalente (Lambert) centrée sur le pôle de l'hémisphère de u."""
+    u = np.asarray(u, dtype=float)
+    u = u / np.linalg.norm(u, axis=-1, keepdims=True)
+    r = np.sqrt(np.clip(2 * (1 - np.abs(u[..., 2])), 0, None))
+    h = np.hypot(u[..., 0], u[..., 1])
+    h = np.where(h < 1e-12, 1.0, h)
+    return u[..., 0] / h * r, u[..., 1] / h * r
+
+
+def plot_sphere_paths(paths, positions, names, path, title="", labels=None):
+    """Trajectoires de directions sur la sphère, en deux disques :
+    hémisphère nord (z ≥ 0) et sud (z < 0), vus d'en haut, projection équivalente.
+
+    paths     : liste de tableaux (T, 3) ; une couleur par trajectoire
+    positions : sommets (n, 3) des fonctions ; names : leurs noms
+    Le bord des disques est l'équateur ; les arêtes passant par un pôle sont
+    des segments radiaux. o = départ, ● = arrivée.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    pos = np.asarray(positions, dtype=float)
+    fig, axes = plt.subplots(1, 2, figsize=(11, 5.4))
+    R = np.sqrt(2)
+    cmap = plt.get_cmap("tab20" if len(paths) > 10 else "tab10")
+    for h, ax in enumerate(axes):
+        north = h == 0
+        t = np.linspace(0, 2 * np.pi, 300)
+        ax.plot(R * np.cos(t), R * np.sin(t), color="gray", lw=0.8)
+        pole = [i for i, p in enumerate(pos) if abs(p[2]) > 0.99 and (p[2] > 0) == north]
+        equator = [i for i, p in enumerate(pos) if abs(p[2]) < 1e-6]
+        if pole:
+            for i in equator:
+                x, y = _azimuthal(pos[i])
+                ax.plot([0, x], [0, y], color="gray", lw=0.6, ls="--")
+        for i, p in enumerate(pos):
+            if abs(p[2]) < 1e-6 or (p[2] > 0) == north:
+                x, y = _azimuthal(p)
+                ax.plot(x, y, "s", color="black", ms=5)
+                ax.annotate(names[i], (x, y), textcoords="offset points",
+                            xytext=(6 * np.sign(x) if abs(x) > 0.1 else 6, 6 * np.sign(y) if abs(y) > 0.1 else 6),
+                            fontsize=10, fontweight="bold", ha="center")
+        for k, P in enumerate(paths):
+            P = np.asarray(P, dtype=float)
+            x, y = _azimuthal(P)
+            keep = (P[:, 2] >= 0) if north else (P[:, 2] < 0)
+            x, y = np.where(keep, x, np.nan), np.where(keep, y, np.nan)
+            c = cmap(k % cmap.N)
+            ax.plot(x, y, lw=1.1, color=c, alpha=0.85,
+                    label=(labels[k] if labels and h == 0 else None))
+            if keep[0]:
+                ax.plot(x[0], y[0], "o", mfc="none", color=c, ms=5)
+            if keep[-1]:
+                ax.plot(x[-1], y[-1], "o", color=c, ms=5)
+        ax.set_aspect("equal")
+        ax.set_xlim(-1.65, 1.65)
+        ax.set_ylim(-1.65, 1.65)
+        ax.axis("off")
+        ax.set_title("hémisphère nord (z ≥ 0)" if north else "hémisphère sud (z < 0)", fontsize=10)
+    if labels:
+        axes[0].legend(fontsize=7, loc="lower left", ncol=2)
+    fig.suptitle(title + "\n(bord = équateur ; o départ, ● arrivée)", fontsize=11)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fig.savefig(path, dpi=130)
+    plt.close(fig)

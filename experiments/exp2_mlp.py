@@ -32,7 +32,7 @@ import torch.nn.functional as F
 
 from gears.utils import (repo_path, set_seed, pick_device, save_json, load_runs, count_params,
                     summarize, plot_curves, plot_theta_trajectories)
-from gears import (make_activation, split_params, GearSchedule, gear_modules,
+from gears import (make_activation, make_schedule, split_params, GearSchedule, gear_modules,
                    snapshot_thetas, ACTIVATION_CHOICES)
 
 
@@ -42,7 +42,7 @@ class MLP(nn.Module):
         layers, d = [], in_dim
         for h in hidden:
             layers.append(nn.Linear(d, h))
-            kw = {"functions": cycle} if cycle and act in ("abu", "gear", "gear_window", "gear_frozen") else {}
+            kw = {"functions": cycle} if cycle and act in ("abu", "gear", "gear_window", "gear_frozen", "gear_relu_init", "gear_alt", "gear_alt_plateau") else {}
             layers.append(make_activation(act, h, **kw))
             d = h
         layers.append(nn.Linear(d, n_classes))
@@ -99,7 +99,8 @@ def train_one(act, seed, data, args, device):
     if thetas:
         groups.append({"params": thetas, "lr": args.lr_theta, "weight_decay": 0.0})
     opt = torch.optim.Adam(groups)
-    sched = GearSchedule(model, *args.gear_window) if act == "gear_window" else None
+    sched = make_schedule(act, model, window=args.gear_window, alt=args.gear_alt,
+                          plateau=dict(patience=int(args.plateau[0]), min_delta=args.plateau[1], theta_tol=args.plateau[2], stop_tol=args.plateau[3], min_on=1))
 
     hist = {k: [] for k in ("train_loss", "val_loss", "val_acc", "epoch_time", "gear_active")}
     theta_hist, track = [], None
@@ -112,7 +113,8 @@ def train_one(act, seed, data, args, device):
 
     gen = torch.Generator().manual_seed(seed)
     for epoch in range(args.epochs):
-        on = sched.step(epoch) if sched else bool(thetas)
+        last = hist["train_loss"][-1] if hist["train_loss"] else None
+        on = sched.step(epoch, last) if sched else bool(thetas)
         t0 = time.time()
         perm = torch.randperm(len(Xtr), generator=gen)
         run_loss = 0.0
@@ -139,6 +141,8 @@ def train_one(act, seed, data, args, device):
     tl, ta = evaluate(model, Xte, Yte, device)
     run = {"activation": act, "seed": seed, "dataset": args.dataset, "test_loss": tl, "test_acc": ta,
            "n_params": count_params(model), "history": hist, "args": vars(args)}
+    if hasattr(sched, "events"):
+        run["schedule_events"], run["schedule_cycles"] = sched.events, sched.cycles
     if track is not None:
         run["theta_history"] = theta_hist
         run["theta_index"] = track.tolist()
@@ -166,6 +170,13 @@ def main():
     p.add_argument("--lr-theta", type=float, default=1e-3)
     p.add_argument("--gear-window", type=int, nargs=2, default=[5, 15],
                    help="époques (début, fin, à partir de 0) où θ est entraîné pour gear_window")
+    p.add_argument("--gear-alt", type=int, nargs=2, default=[4, 2], metavar=("OFF", "ON"),
+                   help="gear_alt : époques θ figés, puis époques θ entraînés, en boucle")
+    p.add_argument("--plateau", type=float, nargs=4, default=[2, 0.05, 2e-3, 5e-3],
+                   metavar=("PATIENCE", "MIN_DELTA", "THETA_TOL", "STOP_TOL"),
+                   help="gear_alt_plateau : ouverture quand la perte d'entraînement baisse de moins de "
+                        "MIN_DELTA (relatif, par époque) sur PATIENCE époques ; fermeture quand θ bouge de "
+                        "moins de THETA_TOL par époque ; arrêt si une phase entière bouge de moins de STOP_TOL")
     p.add_argument("--track-neurons", type=int, default=12)
     p.add_argument("--target", type=float, default=None,
                    help="précision de validation cible pour mesurer la vitesse de convergence (ex. 0.88)")

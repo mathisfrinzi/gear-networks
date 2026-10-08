@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Expérience 1 (point 3) : problèmes jouets de main.py, avec une vraie
+Expérience 1 : problèmes jouets (ET, XOR, somme bruitée, vague), avec une vraie
 rétropropagation, et suivi de la convergence des engrenages θ pour plusieurs
 initialisations des poids.
 
@@ -8,7 +8,7 @@ Pour chaque tâche et chaque graine (= une initialisation des poids) :
   - fixed       : θ figés sur leur position initiale (pas d'engrenage)
   - gear        : θ entraînés tout le long
   - gear_window : θ entraînés seulement dans une fenêtre d'itérations
-                  (équivalent de interval_gear=[500, 600] dans main.py)
+                  (θ ouverts pendant une plage d'itérations seulement)
 
 Les θ initiaux sont IDENTIQUES d'une graine à l'autre (neurone i placé sur la
 fonction i du cycle) : seules les initialisations des poids changent. On voit
@@ -36,7 +36,7 @@ from gears import GearActivation, GearSchedule, split_params, snapshot_thetas
 # Tâches
 # ---------------------------------------------------------------------------
 def make_task(name, rng):
-    if name == "and":       # le jeu de main.py : sorties [-1,-1,-1,1] (c'est un ET logique)
+    if name == "and":       # sorties [-1,-1,-1,1] : un ET logique
         X = torch.tensor([[0, 0], [1, 0], [0, 1], [1, 1]], dtype=torch.float32)
         Y = torch.tensor([[-1], [-1], [-1], [1]], dtype=torch.float32)
         return X, Y, True
@@ -44,7 +44,7 @@ def make_task(name, rng):
         X = torch.tensor([[0, 0], [1, 0], [0, 1], [1, 1]], dtype=torch.float32)
         Y = torch.tensor([[-1], [1], [1], [-1]], dtype=torch.float32)
         return X, Y, True
-    if name == "sum_noisy":  # le second jeu de main.py : y = x1 + x2 + bruit
+    if name == "sum_noisy":  # y = x1 + x2 + bruit
         X = torch.tensor([[x / 100, y / 100] for x in range(100) for y in range(10)], dtype=torch.float32)
         Y = (X.sum(1, keepdim=True) + torch.from_numpy(rng.normal(0, 0.1, (len(X), 1))).float())
         return X, Y, False

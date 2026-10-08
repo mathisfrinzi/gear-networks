@@ -55,7 +55,7 @@ def test_continuity_in_theta():
 
 
 def test_unequal_lengths():
-    # comme RearFunction((linear,2),(tanh,4),(sigmoid,3),(linear,3)) : longueurs 2/12, 4/12...
+    # segments de longueurs relatives 2, 4, 3, 3 (soit 2/12, 4/12, 3/12, 3/12)
     g = GearActivation(1, ("identity", "tanh", "sigmoid", "identity"), lengths=[2, 4, 3, 3], init=1 / 12)
     x = torch.linspace(-2, 2, 20).unsqueeze(1)
     check(torch.allclose(g(x), 0.5 * x + 0.5 * torch.tanh(x), atol=1e-6),
@@ -125,6 +125,7 @@ def test_schedule():
     check(not s.step(11), "fenêtre : θ figé après la fin")
     check(snapshot_thetas(m).shape == (4,), "snapshot_thetas")
 
+
 def test_harden():
     g = GearActivation(3, ("relu", "tanh", "silu"))
     with torch.no_grad():
@@ -133,6 +134,60 @@ def test_harden():
     check(g.dominant_function() == ["relu", "tanh", "relu"] and
           torch.allclose(torch.remainder(g.theta, 1), torch.tensor([0.0, 1 / 3, 0.0])),
           "harden() fixe chaque neurone sur sa fonction dominante")
+
+
+def test_relu_init_equals_relu():
+    for kind in ("gear_relu_init", "sphere_relu_init"):
+        a = make_activation(kind, 4)
+        check(torch.allclose(a(z), F.relu(z), atol=1e-6), f"{kind} : identique à ReLU à l'itération 0")
+        check(a.theta.requires_grad, f"{kind} : θ entraînés")
+        out = a(z.clone().requires_grad_(False))
+        a.theta.grad = None
+        (a(z) ** 2).sum().backward()
+        check(a.theta.grad is not None and a.theta.grad.abs().sum() > 0,
+              f"{kind} : le gradient atteint θ dès le départ")
+    try:
+        make_activation("gear_relu_init", 4, functions=("tanh", "relu"))
+        check(False, "cycle sans relu en premier doit échouer")
+    except ValueError:
+        check(True, "gear_relu_init refuse un cycle qui ne commence pas par relu")
+
+
+def test_cycle_schedule():
+    from gears import GearCycleSchedule
+    net = torch.nn.Sequential(torch.nn.Linear(3, 4), make_activation("gear_alt", 4))
+    s = GearCycleSchedule(net, off=3, on=2)
+    pattern = [s.step(t) for t in range(10)]
+    check(pattern == [False] * 3 + [True] * 2 + [False] * 3 + [True] * 2,
+          "alternance fixe : 3 unités figées, 2 entraînées, en boucle")
+    check(torch.allclose(net[1](z), F.relu(z)), "gear_alt démarre sur ReLU")
+
+
+def test_plateau_schedule():
+    from gears import GearPlateauSchedule
+    net = torch.nn.Sequential(torch.nn.Linear(3, 4), make_activation("gear_alt_plateau", 4))
+    g = net[1]
+    s = GearPlateauSchedule(net, patience=2, min_delta=0.05, theta_tol=1e-3, stop_tol=5e-3)
+    phases = []
+    # pertes qui baissent vite puis se stabilisent : ouverture attendue
+    for t, loss in enumerate([None, 1.0, 0.6, 0.4, 0.39, 0.385]):
+        phases.append(s.step(t, loss))
+    check(phases[:4] == [False] * 4 and phases[-1], "s'ouvre quand la perte se stabilise")
+    # les θ bougent beaucoup, puis plus du tout : fermeture
+    with torch.no_grad():
+        g.theta += 0.1
+    check(s.step(6, 0.38), "reste ouvert tant que les θ bougent")
+    check(not s.step(7, 0.38), "se referme quand les θ ne bougent plus")
+    check(s.phase == "off" and len(s.cycles) == 1, "cycle enregistré, retour en phase figée")
+    # nouveau plateau, phase « on » sans mouvement : arrêt définitif
+    for t, loss in enumerate([0.378, 0.377, 0.377], start=8):
+        s.step(t, loss)
+    check(s.phase == "on", "rouvre au plateau suivant")
+    s.step(11, 0.377)
+    check(s.phase == "done" and not s.step(12, 0.3), "arrêt définitif si les θ ne bougent plus du tout")
+    s2 = GearPlateauSchedule(net)
+    s2.load_state_dict(s.state_dict())
+    check(s2.phase == "done" and s2.events == s.events, "état sauvegardé et rechargé (reprise sur checkpoint)")
 
 
 if __name__ == "__main__":

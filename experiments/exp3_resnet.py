@@ -36,14 +36,16 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # racine du dépôt
 import time
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from gears.utils import (repo_path, set_seed, pick_device, save_json, load_runs, count_params,
+from gears.utils import (repo_path, plot_sphere_paths, set_seed, pick_device, save_json, load_runs, count_params,
                     summarize, plot_curves, plot_theta_trajectories)
-from gears import (make_activation, split_params, GearSchedule, gear_modules,
-                   snapshot_thetas, ACTIVATION_CHOICES)
+from gears import (make_activation, make_schedule, split_params, GearSchedule, gear_modules, position_modules,
+                   sphere_modules, snapshot_thetas, snapshot_directions, layout_positions,
+                   ACTIVATION_CHOICES)
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +150,7 @@ def train(args):
     set_seed(args.seed)
     cycle = args.cycle
     act_fn = lambda c: make_activation(args.act, c, functions=cycle) \
-        if args.act in ("abu", "gear", "gear_window", "gear_frozen") else make_activation(args.act, c)
+        if args.act in ("abu", "gear", "gear_window", "gear_frozen", "gear_relu_init", "gear_alt", "gear_alt_plateau") else make_activation(args.act, c)
     model = ResNetCifar(act_fn, n=args.depth_n).to(device)
     print(f"Appareil : {device} | AMP : {amp} | ResNet-{6 * args.depth_n + 2} | activation : {args.act} "
           f"| paramètres : {count_params(model):,}")
@@ -166,18 +168,26 @@ def train(args):
     opt = torch.optim.SGD(groups, momentum=0.9, nesterov=False)
     milestones = args.milestones or [int(args.epochs * 0.5), int(args.epochs * 0.75)]
     lr_sched = torch.optim.lr_scheduler.MultiStepLR(opt, milestones, 0.1)
-    gear_sched = GearSchedule(model, *args.gear_window) if args.act == "gear_window" else None
+    gear_sched = make_schedule(args.act, model, window=args.gear_window, alt=args.gear_alt,
+                               plateau=dict(patience=int(args.plateau[0]), min_delta=args.plateau[1], theta_tol=args.plateau[2], stop_tol=args.plateau[3], min_on=2))
     scaler = torch.amp.GradScaler(enabled=amp)
 
     tag = f"{args.act}_s{args.seed}"
     ckpt_path = os.path.join(args.out, f"ckpt_{tag}.pt")
     hist = {k: [] for k in ("train_loss", "train_acc", "val_loss", "val_acc", "lr", "epoch_time", "gear_active")}
     theta_hist, start_epoch = [], 0
-    track = None
+    # suivi de quelques neurones : θ (cercle) ou direction u (sphère)
+    track, snap = None, None
     if gear_modules(model):
+        snap = lambda: snapshot_thetas(model, raw=True)[track].tolist()
+        n_track = len(snapshot_thetas(model))
+    elif sphere_modules(model):
+        snap = lambda: snapshot_directions(model)[track].tolist()
+        n_track = len(snapshot_directions(model))
+    if snap is not None:
         g = torch.Generator().manual_seed(123)
-        track = torch.randperm(len(snapshot_thetas(model)), generator=g)[:args.track_neurons]
-        theta_hist.append(snapshot_thetas(model, raw=True)[track].tolist())
+        track = torch.randperm(n_track, generator=g)[:args.track_neurons]
+        theta_hist.append(snap())
 
     if os.path.exists(ckpt_path) and not args.no_resume:
         ck = torch.load(ckpt_path, map_location=device, weights_only=False)
@@ -185,11 +195,14 @@ def train(args):
         lr_sched.load_state_dict(ck["sched"]); scaler.load_state_dict(ck["scaler"])
         hist, theta_hist, start_epoch = ck["hist"], ck["theta_hist"], ck["epoch"]
         torch.set_rng_state(ck["rng"].cpu())
+        if gear_sched is not None and ck.get("gear_sched"):
+            gear_sched.load_state_dict(ck["gear_sched"])
         print(f"Reprise à l'époque {start_epoch}")
 
     train_loader, test_loader = loaders(args, start_epoch)
     for epoch in range(start_epoch, args.epochs):
-        on = gear_sched.step(epoch) if gear_sched else bool(thetas)
+        last = hist["train_loss"][-1] if hist["train_loss"] else None
+        on = gear_sched.step(epoch, last) if gear_sched else bool(thetas)
         t0 = time.time()
         tot_loss, tot_correct, n = 0.0, 0, 0
         for b, (x, y) in enumerate(train_loader):
@@ -216,25 +229,29 @@ def train(args):
         hist["lr"].append(opt.param_groups[0]["lr"])
         hist["gear_active"].append(on)
         if track is not None:
-            theta_hist.append(snapshot_thetas(model, raw=True)[track].tolist())
+            theta_hist.append(snap())
         print(f"[{tag}] époque {epoch + 1:>3}/{args.epochs}  train {hist['train_loss'][-1]:.3f} "
               f"({100 * hist['train_acc'][-1]:.1f}%)  test {100 * va:.2f}%  "
               f"{hist['epoch_time'][-1]:.0f}s" + ("  θ actifs" if on and thetas else ""), flush=True)
         torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": lr_sched.state_dict(),
                     "scaler": scaler.state_dict(), "hist": hist, "theta_hist": theta_hist,
-                    "epoch": epoch + 1, "rng": torch.get_rng_state()}, ckpt_path)
+                    "epoch": epoch + 1, "rng": torch.get_rng_state(),
+                    "gear_sched": gear_sched.state_dict() if gear_sched is not None else None}, ckpt_path)
 
     # NB : comme dans l'article, la courbe « val » est celle du jeu de test CIFAR-10.
     # Ne réglez donc pas lr_theta ou le cycle en regardant cette courbe (voir README).
     run = {"activation": args.act, "seed": args.seed, "test_loss": hist["val_loss"][-1],
            "test_acc": hist["val_acc"][-1], "n_params": count_params(model), "history": hist,
            "args": vars(args)}
+    if hasattr(gear_sched, "events"):
+        run["schedule_events"], run["schedule_cycles"] = gear_sched.events, gear_sched.cycles
     if track is not None:
-        run["theta_history"], run["theta_index"] = theta_hist, track.tolist()
-        run["cycle"] = gear_modules(model)[0].names
+        key = "theta_history" if gear_modules(model) else "sphere_path"
+        run[key], run["theta_index"] = theta_hist, track.tolist()
+        run["cycle"] = position_modules(model)[0].names
         run["dominant_per_layer"] = []
         for name, m in model.named_modules():
-            if m in gear_modules(model):
+            if getattr(m, "is_gear", False):
                 d = m.dominant_function()
                 run["dominant_per_layer"].append({"layer": name, **{f: d.count(f) for f in m.names}})
     save_json(run, os.path.join(args.out, f"run_{tag}.json"))
@@ -257,6 +274,13 @@ def do_summary(args):
     plot_curves(runs, ["train_loss", "val_loss", "val_acc"], os.path.join(args.out, "curves.png"),
                 title="ResNet-20 — CIFAR-10")
     plot_theta_trajectories(runs, os.path.join(args.out, "theta.png"), title="ResNet-20 — CIFAR-10")
+    for r in runs:
+        if r.get("sphere_path") and r["seed"] == 0 and r["activation"] != "sphere_frozen":
+            P = np.array(r["sphere_path"])
+            pos = layout_positions("octa").numpy()
+            plot_sphere_paths([P[:, i] for i in range(P.shape[1])], pos, r["cycle"],
+                              os.path.join(args.out, f"{r['activation']}_paths.png"),
+                              title=f"ResNet-20 — {r['activation']} : neurones suivis (graine 0)")
     print(f"\nRésumé : {args.out}/summary.txt, curves.png, theta_*.png")
 
 
@@ -275,6 +299,13 @@ def main():
     p.add_argument("--wd", type=float, default=1e-4)
     p.add_argument("--gear-window", type=int, nargs=2, default=[20, 90],
                    help="époques où θ est entraîné pour --act gear_window")
+    p.add_argument("--gear-alt", type=int, nargs=2, default=[10, 5], metavar=("OFF", "ON"),
+                   help="gear_alt : époques θ figés, puis époques θ entraînés, en boucle")
+    p.add_argument("--plateau", type=float, nargs=4, default=[2, 0.05, 1e-3, 5e-3],
+                   metavar=("PATIENCE", "MIN_DELTA", "THETA_TOL", "STOP_TOL"),
+                   help="gear_alt_plateau : ouverture quand la perte d'entraînement baisse de moins de "
+                        "MIN_DELTA (relatif, par époque) sur PATIENCE époques ; fermeture quand θ bouge de "
+                        "moins de THETA_TOL par époque ; arrêt si une phase entière bouge de moins de STOP_TOL")
     p.add_argument("--track-neurons", type=int, default=12)
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--data-dir", default="./data")
