@@ -118,7 +118,6 @@ réglages par défaut.
 | `exp1_toy.py` | tâches jouets, trajectoires de θ pour 5 initialisations | CPU, ~3 min |
 | `exp2_mlp.py` | MLP sur MNIST / Fashion-MNIST, 7 activations, plusieurs graines | CPU possible |
 | `exp3_resnet.py` | ResNet-20 sur CIFAR-10 | GPU |
-| `run_resnet.py` | enchaîne les runs ResNet (réglages en tête de fichier) | GPU |
 | `diag_nodes.py` | diagnostic du collage aux nœuds | CPU, ~3 min |
 
 Pour reproduire le tableau MLP :
